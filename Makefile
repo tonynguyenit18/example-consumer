@@ -1,17 +1,14 @@
+#!make
+include .env
 # Default to the read only token - the read/write token will be present on Travis CI.
 # It's set as a secure environment variable in the .travis.yml file
 GITHUB_ORG="pactflow"
 PACTICIPANT := "pactflow-example-consumer"
 GITHUB_WEBHOOK_UUID := "04510dc1-7f0a-4ed2-997d-114bfa86f8ad"
 PACT_CHANGED_WEBHOOK_UUID := "8e49caaa-0498-4cc1-9368-325de0812c8a"
-PACT_CLI="docker run --rm -v ${PWD}:${PWD} -e PACT_BROKER_BASE_URL -e PACT_BROKER_TOKEN pactfoundation/pact-cli:latest"
+PACT_CLI="docker run --rm --network microservice-contract-testing_default -v ${PWD}:${PWD} -e PACT_BROKER_BASE_URL -e PACT_BROKER_TOKEN -e PACT_BROKER_BASIC_AUTH_USERNAME -e PACT_BROKER_BASIC_AUTH_PASSWORD pactfoundation/pact-cli:latest"
 
-# Only deploy from master
-ifeq ($(TRAVIS_BRANCH),master)
-	DEPLOY_TARGET=deploy
-else
-	DEPLOY_TARGET=no_deploy
-endif
+TARGET = qa
 
 all: test
 
@@ -19,30 +16,29 @@ all: test
 ## CI tasks
 ## ====================
 
-ci: test publish_pacts can_i_deploy $(DEPLOY_TARGET)
-ci_nock: test_nock publish_pacts can_i_deploy $(DEPLOY_TARGET)
+ci: test publish_pacts can_i_deploy
+ci_nock: test_nock publish_pacts can_i_deploy
 
 # Run the ci target from a developer machine with the environment variables
 # set as if it was on Travis CI.
 # Use this for quick feedback when playing around with your workflows.
 fake_ci: .env
-	@CI=true \
-	TRAVIS_COMMIT=`git rev-parse --short HEAD`+`date +%s` \
-	TRAVIS_BRANCH=`git rev-parse --abbrev-ref HEAD` \
-	REACT_APP_API_BASE_URL=http://localhost:8080 \
 	make ci
 
 fake_ci_nock: .env
-	@CI=true \
-	TRAVIS_COMMIT=`git rev-parse --short HEAD`+`date +%s` \
-	TRAVIS_BRANCH=`git rev-parse --abbrev-ref HEAD` \
-	REACT_APP_API_BASE_URL=http://localhost:8080 \
 	make ci_nock
+
+deploy_with_new_tag: 
+
 
 publish_pacts: .env
 	@echo "\n========== STAGE: publish pacts ==========\n"
-	@"${PACT_CLI}" publish ${PWD}/pacts --consumer-app-version ${TRAVIS_COMMIT} --tag ${TRAVIS_BRANCH}
-
+ifeq ($(TRAVIS_BRANCH),master)
+	@"${PACT_CLI}" publish ${PWD}/pacts --consumer-app-version ${TRAVIS_COMMIT} --tag ${TRAVIS_BRANCH} -b ${PACT_BROKER_BASE_URL} -u ${PACT_BROKER_BASIC_AUTH_USERNAME} -p ${PACT_BROKER_BASIC_AUTH_PASSWORD}
+else
+	@"${PACT_CLI}" publish ${PWD}/pacts --consumer-app-version ${TRAVIS_COMMIT} --tag ${TRAVIS_BRANCH} new -b ${PACT_BROKER_BASE_URL} -u ${PACT_BROKER_BASIC_AUTH_USERNAME} -p ${PACT_BROKER_BASIC_AUTH_PASSWORD}
+endif
+ 
 ## =====================
 ## Build/test tasks
 ## =====================
@@ -59,26 +55,29 @@ test_nock: .env
 ## Deploy tasks
 ## =====================
 
-deploy: deploy_app tag_as_prod
+deploy_to: 
+	make deploy_app TARGET=${TARGET}
+	make tag_as TARGET=${TARGET}
 
 no_deploy:
 	@echo "Not deploying as not on master branch"
 
 can_i_deploy: .env
-	@echo "\n========== STAGE: can-i-deploy? ==========\n"
+	@echo "\n========== STAGE: can-i-deploy to  ${TARGET}? ==========\n"
 	@"${PACT_CLI}" broker can-i-deploy \
 	  --pacticipant ${PACTICIPANT} \
 	  --version ${TRAVIS_COMMIT} \
-	  --to prod \
+	  --to ${TARGET} \
 	  --retry-while-unknown 0 \
-	  --retry-interval 10
+	  --retry-interval 10 \
+	--broker-base-url ${PACT_BROKER_BASE_URL} -u ${PACT_BROKER_BASIC_AUTH_USERNAME} -p ${PACT_BROKER_BASIC_AUTH_PASSWORD}
 
 deploy_app:
-	@echo "\n========== STAGE: deploy ==========\n"
-	@echo "Deploying to prod"
+	@echo "\n========== STAGE: deploy to  ${TARGET} ==========\n"
+	@echo "Deploying to ${TARGET}"
 
-tag_as_prod: .env
-	@"${PACT_CLI}" broker create-version-tag --pacticipant ${PACTICIPANT} --version ${TRAVIS_COMMIT} --tag prod
+tag_as: .env
+	@"${PACT_CLI}" broker create-version-tag --pacticipant ${PACTICIPANT} --version ${TRAVIS_COMMIT} --tag ${TARGET} -b ${PACT_BROKER_BASE_URL} -u ${PACT_BROKER_BASIC_AUTH_USERNAME} -p ${PACT_BROKER_BASIC_AUTH_PASSWORD}
 
 ## =====================
 ## Pactflow set up tasks
